@@ -6,7 +6,7 @@
 
 //==SETTINGS ARE HERE==
 
-set GateAlt to 1000. //height above landing zone altitude of the approach gate in metres
+set GateHeight to 1000. //height above landing zone altitude of the approach gate in metres
 
 Set AlignmentTolerance to 0.15. //tolerance for the orbital alignment loop during the orbital phase, in degrees
 
@@ -82,7 +82,7 @@ function ThrustOutput //function to calculate the thrust output of a given throt
 	parameter MinThro. //Parameter for Min throttle setting of engines
 	Parameter Thro. //parameter for throttle setting to evaluate
 	
-	set MinThru to MaxThru * MinThro. //calculate minimum possible throttle
+	set MinThru to MaxThru * MinThro. //calculate minimum possible thrust
 	set ThruAdd to (MaxThru - MinThru) * Thro. //calculate the thrust made up by the throttle setting
 	set Thru to MinThru + ThruAdd.
 	
@@ -110,33 +110,33 @@ function OrbitLift //Function to calculate the phantom lift experienced when at 
 	
 	set Accel to (Sqrt(spd^2 + (Alti + ship:body:radius)^2) - Alti - ship:body:radius) * 2.
 	
-	Return Accel.
+	Return Accel. //returns the phantom acceleration (M/s^2 caused by travelling near or above orbital velocity
 }
 
 function FlightPlan //function to create a flight plan of the descent by stepwise simulation
 {
 	parameter MinThrottle.
 	parameter GateAlt. //altitude of the approach gate above "sea level"
-	parameter ShipThrust is ship:maxthrust. //max thrust of ship, default is current max thrust
-	parameter PlanAlt is Ship:ORBIT:PERIAPSIS. //altitude at the start of the descent burn, default is ship periapsis
-	parameter VSpd is 0. //Vertical Speed at start of descent burn, default is 0
-	parameter PlanHSpd is Ship:GroundSpeed. //horizontal speed at start of descent burn, default is surface frame speed at time of calculation
-	parameter ShipMass is Ship:Mass. //mass of ship at start of burn, default is current ship mass
-	parameter ShipISP is Ship:ISP. //ISP of the ships engines
+	parameter ShipThrust. //max thrust of ship, default is current max thrust
+	parameter PlanAlt. //altitude at the start of the descent burn, default is ship periapsis
+	parameter VSpd. //Vertical Speed at start of descent burn, default is 0
+	parameter PlanHSpd. //horizontal speed at start of descent burn, default is surface frame speed at time of calculation
+	parameter ShipMass. //mass of ship at start of burn, default is current ship mass
+	parameter ShipISP. //ISP of the ships engines
 	
 	set PlanThru to ThrustOutput(ShipThrust,MinThrottle,0.95). //calculate the thrust generated at 95% throttle, using existing function, 5% lower thrust allows for anomalies and inaccuracies later.
 	Set Dist to 0. //distance to be tracked, to act as a trigger for descent burn commencement later
 	set StartAlt to PlanAlt.
 	
 	set Plan to List().
-	Plan:add(Dist,PlanAlt,PlanHSpd,Vspd). //add starting figures to flightplan in index position 0.
+	Plan:add(list(Dist,PlanAlt,PlanHSpd,Vspd)). //add starting figures to flightplan in index position 0.
 	
 	until PlanHSpd < 0 //loop that runs until the horizontal speed is arrested. First run of the stepwise simulation, little altitude data
 	{
 		set Gravity to (ship:body:mu * ShipMass) / (PlanAlt + Ship:Body:radius)^2. //gravity force acting on the ship
 		set LiftNeeded to Gravity - (OrbitLift(PlanHSpd,PlanAlt) * ShipMass). //calculate the force needed by the engines to maintain vertical speed
-		set PlanPitch to arcsin(LiftNeeded/PlanThru). //calculate the pitch angle needed to maintain vertical speed at planned thrust
-		set HAcc to (cos(PlanPitch) * PlanThrust) / ShipMass. //calculate the horizontal Acceleration produced at the profile calculated above
+		set PlanPitch to arcsin(LiftNeeded/(PlanThru/1000)). //calculate the pitch angle needed to maintain vertical speed at planned thrust
+		set HAcc to (cos(PlanPitch) * PlanThru) / ShipMass. //calculate the horizontal Acceleration produced at the profile calculated above
 		set Vspd to Vspd - LiftNeeded / ShipMass. //calculate what the new vertical speed would be if not pitched up
 		set PlanHSpd to PlanHSpd - HAcc. //reduce Horizontal Speed by acceleration this pass
 		set Dist to Dist + PlanHSpd. //increase distance by current speed
@@ -193,8 +193,8 @@ function FlightPlan //function to create a flight plan of the descent by stepwis
 
 //Initialisation
 //set up terminal, get landing target information, check for vessel stats loaded, check orbit params
-SET TERMINAL:WIDTH to 36.
-SET TERMINAL:HEIGHT to 20.
+SET TERMINAL:WIDTH to 66. //return to 36 later
+SET TERMINAL:HEIGHT to 40. //return to 20 later
 SET INIT TO FALSE.
 CLEARSCREEN.
 PRINT "========ALDRIN========" AT (0,0). //pretty terminal header
@@ -234,27 +234,46 @@ if SHIP:ORBIT:APOAPSIS > 40000
 	break.
 }
 
-set WayPoints to ALLWAYPOINTS().
+set WayPoints to ALLWAYPOINTS(). //make a list of all the KSP waypoints available
+set WaypointFound to FALSE.
+set CheckTarget to FALSE.
 
-if WayPoints:CONTAINS("ALDRIN LZ") = TRUE //search for KSP Waypoint named "ALDRIN LZ"
+for item in WayPoints //iterate over the list of waypoints to...
+{
+	if item:name = "ALDRIN LZ" //find any waypoints with the correct name to be used to land at
+	{
+		set WaypointFound to TRUE.
+	}
+}
+
+if HasTarget = TRUE //check if the ship has a vessel or flag targetted
+{
+	Set CheckTarget to True.
+}
+
+if WaypointFound = TRUE
 {
 	set LZ to WAYPOINT("ALDRIN LZ"):GEOPOSITION.
 	set LZSOURCE to "WAYPOINT".
 	PRINT "LZ set to WAYPOINT" at (0,4).
 }
-ELSE IF TARGET:StatusText = "LANDED" OR "SPLASHED" //2nd option, if a landed ship or flag is selected
+ELSE IF CheckTarget = TRUE //2nd option, if a landed ship or flag is selected
 {
-	set LZ to TARGET:GEOPOSITION.
-	set LZSOURCE to "TARGET".
-	PRINT "LZ set to TARGET" at (0,4).
+	IF TARGET:Status = "LANDED" OR "SPLASHED"
+	{
+		set LZ to TARGET:GEOPOSITION.
+		set LZSOURCE to "TARGET".
+		PRINT "LZ set to TARGET" at (0,4).
+	}
 }
 ELSE //if no other targets, use ships position in 90 degrees
 {
 	set LZ to circle_destination(ship:geoposition,vel_bearing(),SHIP:BODY:RADIUS * constant:pi * 0.5). //trace around the surface by the current surface velocity heading for 1/4 the body's circumference
-	set LZ:LNG to LZ:LNG - (360 * ship:orbit:period * 0.3 /ship:body:rotationperiod). //reduce the longitude by how far the body will rotate in the approximate time of landing
 	if lz:lng < -180
 	{
-		set lz:lng to lz:lng + 360. //if longitude was nudged to an improper value, bring it back round to a proper one
+		set NEWLNG to lz:lng + 360. //if longitude was nudged to an improper value, bring it back round to a proper one
+		set NEWLZ to LATLNG(LZ:LAT,NEWLNG).
+		set LZ to NEWLZ.
 	}
 	set LZSOURCE to "NONE".
 	PRINT "LZ set by Current Pos" at (0,4).
@@ -358,7 +377,7 @@ if RUNMODE = "ORB"
 	}
 	
 	Set GateAlt to LZ:TERRAINHEIGHT + GateHeight. //calculate the altitude of the approach gate
-	Set Plan to FlightPlan(MinThrottle,GateAlt,ShipThrust). //run the function to create a flight plan for the descent burn, not using totaly accurate starting data yet.
+	Set Plan to FlightPlan(MinThrottle,GateAlt,ShipThrust,ship:orbit:periapsis,0,ship:groundspeed,ship:mass,ShipISP). //run the function to create a flight plan for the descent burn, not using totaly accurate starting data yet.
 	StatusText("Flight Plan Generated").
 	
 	//warp to near braking burn start
@@ -370,7 +389,7 @@ if RUNMODE = "ORB"
 	SET KUNIVERSE:TIMEWARP:WARP to 0.
 	
 	//recalc flightplan with accurate starting data
-	Set Plan to FlightPlan(MinThrottle,GateAlt,ShipThrust,ship:altitude,ship:verticalspeed).
+	Set Plan to FlightPlan(MinThrottle,GateAlt,ShipThrust,ship:altitude,ship:verticalspeed,ship:groundspeed,ship:mass,ShipISP).
 	
 	//set up display for descent information
 	print "      CURRENT    PLANNED" 			at (0,8). //header line
