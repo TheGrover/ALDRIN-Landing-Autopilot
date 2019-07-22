@@ -15,7 +15,9 @@ set GateHeight to 1000. //height above landing zone altitude of the approach gat
 
 Set AlignmentTolerance to 0.05. //tolerance for the orbital alignment loop during the orbital phase, in degrees
 
-Set TurnTime to 5. //time taken to rotate the ship from one point to another
+Set TurnTime to 10. //time taken to rotate the ship from one point to another
+
+set LevelOffDist to 10000. //distance from the target to begin reducing vertical speed
 
 set HDGAdjustMult to 2. //multiplier of course error to heading point correction
 
@@ -275,6 +277,8 @@ function FlightPlan //function to create a flight plan of the descent by stepwis
 SET TERMINAL:WIDTH to 66. //return to 36 later
 SET TERMINAL:HEIGHT to 40. //return to 20 later
 
+set ClearLine to "                              ". //a string of spaces to act as a line clearer
+
 set SOUND to GetVoice(0). //get the voice to play sounds later
 set DoubleBeep to list(NOTE(1000,0.1),NOTE(0,0.2),NOTE(1000,0.1)).
 
@@ -462,7 +466,7 @@ if RUNMODE = "ORB"
 		{
 			wait 0.
 		}
-		wait 2. //wait 2 seconds for ship to settle
+		wait TurnTime. //wait 2 seconds for ship to settle
 		
 		if ULLAGE = TRUE //if ullage is needed
 		{
@@ -584,20 +588,33 @@ if RUNMODE = "BRAKE"
 		
 		//print all relevant data points to output
 		
+		print Clearline at (0,9).
 		print "DIST " at (0,9).  print round((LZRange/1000),2) at (6,9). print " " + Round(abs(Plan[Entry][0]/1000),2) at (16,9). Print " KM" at (34,9).
+		print Clearline at (0,10).
 		print "HSPD " at (0,10). print round(ship:groundspeed,1) at (6,10). print " " + round(Plan[Entry][2],1) at (16,10). print " M/S" at (33,10).
+		print Clearline at (0,11).
 		print "VSPD " at (0,11). print round(ship:verticalspeed,1) at (6,11). print " " + round(Plan[Entry][3],1) at (16,11). print " M/S" at (33,11).
+		print Clearline at (0,12).
 		print "ALT  " at (0,12). print round(ship:altitude/1000,2) at (6,12). print " " + Round (Plan[Entry][1]/1000,2) at (16,12). print " KM" at (34,12).
+		print Clearline at (0,13).
 		print "CRS  " at (0,13). print round(Vel_bearing(),1) at (6,13). print " " + round(circle_bearing(ship:geoposition,LZ),1) at (16,13). print " DEG" at (33,13).
+		print Clearline at (0,14).
 		print "HCOR " at (0,14). print round(HDGAdjust,1) at (6,14). print " DEG" at (33,14).
+		print Clearline at (0,15).
 		print "PIT  " at (0,15). print " " + round(PlanPitch+PitchAdjust,1) at (16,15).
 		
+		//print Clearline at (0,17).
 		//print "LiftRatio: " + round((LiftNeeded/(ThrustOutput(ShipThrust*1000,MinThrottle,throttle))),2) at (0,17).
+		print Clearline at (0,18).
 		print "ALTCHECK: " + round(AltCheck,2) at (0,18).
+		print Clearline at (0,19).
 		print "HspdCheck: " + round(HSpdCheck,2) at (0,19).
+		print Clearline at (0,20).
 		print "VSpdCheck: " + round(VSpdCheck,2) at (0,20).
 		
+		print Clearline at (0,22).
 		print "PitchAdj: " + round(PitchAdjust,2) at (0,22).
+		print Clearline at (0,23).
 		print "ThrotAdj: " + round(ThrotAdjust,2) at (0,23).
 		
 		
@@ -641,7 +658,7 @@ if RUNMODE = "BRAKE"
 				set Beep to TRUE. //don't beep again
 			}
 			
-			if ship:groundspeed < 50 //if speed gets below 50m/s before completing the flightplay (error in control resulted in decelerating too much)
+			if ship:groundspeed < 50 //if speed gets below 50m/s before completing the flightplan (error in control resulted in decelerating too much)
 			{
 				BREAK. //break out of the control loop and proceed to approach
 			}
@@ -649,7 +666,12 @@ if RUNMODE = "BRAKE"
 			set CurThru to ThrustOutput(ShipThrust*1000,MinThrottle,throttle).
 			set PlanPitch to arcsin(min(1,max(-1,LiftNeeded/CurThru))). //calculate the pitch angle needed to maintain vertical speed at planned thrust (locked the ARCSIN function to within its legal values)
 			
-			
+			set TgtVSpd to Plan[Entry][3]. //read the target vertical speed from the flight plan
+			if LZRange < LevelOffDist //if we are close to the end of the descent and want to begin reducing vertical speed
+			{
+				set TgtVSpd to TgtVSpd * (abs(LZRange - LevelOffDist) / LevelOffDist). //gradually reduce target vertical speed proportional to how far within the LevelOffDist we are
+			}
+			set VSpdCheck to 1 - (Ship:VerticalSpeed/TgtVSpd). //ratio between VSpd Error and target VSpd, negative numbers mean descending too fast, positive numbers mean descending too slow (Or ascending if > 1)
 			
 			//HSpd feedback
 			set HSpdCheck to (100 - ((ship:groundspeed/Plan[entry][2]) * 100))*-1.
@@ -664,9 +686,7 @@ if RUNMODE = "BRAKE"
 					set PitchAdjust to 0 - (VSpdCheck * VSpdMult * PitchMult).
 					set ThrotAdjust to (HSpdCheck/100) * ThrotMult * HSpdMult.
 				}
-			}
-			
-			set VSpdCheck to 1 - (Ship:VerticalSpeed/Plan[Entry][3]). //ratio between VSpd Error and target VSpd, negative numbers mean descending too fast, positive numbers mean descending too slow (Or ascending if > 1)
+			}			
 			
 			//ALT feedback
 			set ALTCheck to (100 - ((ship:altitude/Plan[entry][1]) * 100))*-1.
@@ -720,10 +740,14 @@ if RUNMODE = "APPROACH"
 	{
 		lock steering to SRFRETROGRADE. //start orienting to surface retrograde, leave throttle as it was set before
 		lock throttle to 1. //max throttle to prevent overrunning into too low altitude
+		
 		lock CurPitch to 90 - vectorangle(ship:up:forevector, ship:facing:forevector).
+		lock ActAcc to sin(CurPitch) * ((ThrustOutput(ShipThrust*1000,MinThrottle,0.9) - Gravity) / (ship:mass/1000)). //calculate the acceleration achievable at 90% throttle, allowing for gravity
+		lock SafeVSpd to SQRT(2 * (Alt:RADAR + 10) * ActAcc). //calculate the safe vertical speed based on a Hoverslam calculation using current altitude (with 10m safety margin) and acceleration calculated above
+		
 		until CurPitch > 25 //until pitch is above 25 degrees
 		{
-			if ship:verticalspeed < ((ALT:Radar/40)*-1) //if descending faster than the controlled descent speed
+			if ship:verticalspeed < -SafeVspd //if descending faster than the controlled descent speed
 			{
 				set ship:control:fore to 1. //use RCS as extra thrust
 			}
@@ -739,7 +763,7 @@ if RUNMODE = "APPROACH"
 		
 		until ALT:radar <= 100
 		{
-			set ThrotPID:Setpoint to ((ALT:Radar/40)*-1). //try to maintain a descent rate equal to 2.5% the radar altitude, i,e, 2.5m/s at 100m alt.
+			set ThrotPID:Setpoint to -SafeVSpd. //try to maintain a descent rate equal to 2.5% the radar altitude, i,e, 2.5m/s at 100m alt.
 			set throttle to ThrotPID:update(time:seconds,ship:verticalspeed). //update throttle using PID loop.
 			wait 0.
 		}
@@ -751,7 +775,7 @@ if RUNMODE = "APPROACH"
 		//wait for landing
 		until alt:radar < 1
 		{
-			set ThrotPID:Setpoint to MIN(-0.5,((ALT:Radar/40) * -1)). //try to maintain a descent rate equal to 5% the radar altitude, i,e, 25m/s at 500m alt.
+			set ThrotPID:Setpoint to MIN(-0.5,-SafeVSpd). //try to maintain a descent rate equal to 3.33% the radar altitude, i,e, 3.33m/s at 100m alt.
 			set throttle to ThrotPID:update(time:seconds,ship:verticalspeed). //update throttle using PID loop.
 			
 			if ship:verticalspeed > -0.25 //if no longer descending
