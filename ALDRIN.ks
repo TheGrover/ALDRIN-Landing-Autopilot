@@ -13,13 +13,15 @@ set Config:DEFAULTFONTSIZE to 14.
 
 set GateHeight to 1000. //height above landing zone altitude of the approach gate in metres
 
+set GateOffset to 2000. //distance on plan between LZ and gate
+
 Set AlignmentTolerance to 0.05. //tolerance for the orbital alignment loop during the orbital phase, in degrees
 
 Set TurnTime to 10. //time taken to rotate the ship from one point to another
 
 set LevelOffDist to 10000. //distance from the target to begin reducing vertical speed
 
-set HDGAdjustMult to 2. //multiplier of course error to heading point correction
+set HDGAdjustMult to 3. //multiplier of course error to heading point correction (i.e. if course error is 1 deg. point the ship 1 * Mult off the retrograde to correct
 
 set HSpdTolerance to 0.2. //percentage check of groundspeed difference between current and planned to trigger corrective feedback
 
@@ -130,22 +132,24 @@ function OrbitLift //Function to calculate the phantom lift experienced when at 
 	Parameter Spd. //orbital speed, does not allow for the difference between orbital speed and ground speed, as the surface speed of the moon's surface is less than 5m^s
 	Parameter Alti. //altitude
 	
-	set Precision to 1. //multiplier to increase the level of precision, higher number = more precise value (beware the floating point errors)
-	set Accel to (Sqrt((spd/Precision)^2 + (Alti + ship:body:radius)^2) - Alti - ship:body:radius) * 2 * Precision.
+	set Accel to (Sqrt(spd^2 + (Alti + ship:body:radius)^2) - Alti - ship:body:radius) * 2.
 	
-	Return max(0,Accel). //returns the phantom acceleration (M/s^2 caused by travelling near or above orbital velocity, forced not to return a negative value
+	Return Accel. //returns the phantom acceleration (M/s^2 caused by travelling near or above orbital velocity, forced not to return a negative value
 }
 
 function FlightPlan //function to create a flight plan of the descent by stepwise simulation
 {
 	parameter MinThrottle.
 	parameter GateAlt. //altitude of the approach gate above "sea level"
-	parameter ShipThrust. //max thrust of ship, default is current max thrust
-	parameter PlanAlt. //altitude at the start of the descent burn, default is ship periapsis
-	parameter VSpd. //Vertical Speed at start of descent burn, default is 0
+	parameter ShipThrust. //max thrust of ship
+	parameter PlanAlt. //altitude at the start of the descent burn
+	parameter VSpd. //Vertical Speed at start of descent burn
 	parameter PlanHSpd. //horizontal speed at start of descent burn, default is surface frame speed at time of calculation
-	parameter ShipMass. //mass of ship at start of burn, default is current ship mass
+	parameter ShipMass. //mass of ship at start of burn
 	parameter ShipISP. //ISP of the ships engines
+	
+	//RESOLUTION SETTING: this is the "Step size" of the descent simulation. smaller is more accurate and precise, but makes the plan generation time take longer (and require more memory)
+	Set Resolution to 1.
 	
 	set PlanThru to ThrustOutput(ShipThrust,MinThrottle,0.95). //calculate the thrust generated at 95% throttle, using existing function, 5% lower thrust allows for anomalies and inaccuracies later.
 	Set Dist to 0. //distance to be tracked, to act as a trigger for descent burn commencement later
@@ -162,14 +166,13 @@ function FlightPlan //function to create a flight plan of the descent by stepwis
 		set PitchRatio to LiftNeeded/(PlanThru*1000).
 		if PitchRatio > 1 //if more thrust is required to maintain VSpd than available
 		{
+			clearscreen.
 			print "ERROR: Ship is unable to decelerate".
 			print "without losing altitude control".
 			print " ".
 			print "Redesign ship to have higher TWR!".
 			print "Program will terminate".
 			set DescentError to TRUE.
-			break.
-			break.
 			break.
 		}
 		else
@@ -178,18 +181,25 @@ function FlightPlan //function to create a flight plan of the descent by stepwis
 		}
 		
 		set HAcc to (cos(PlanPitch) * (PlanThru*1000)) / (ShipMass*1000). //calculate the horizontal Acceleration produced at the profile calculated above (In m/s^2)
-		set Vspd to Vspd - (LiftNeeded / (ShipMass*1000)). //calculate what the new vertical speed would be if not pitched up
-		set PlanHSpd to PlanHSpd - HAcc. //reduce Horizontal Speed by acceleration this pass
-		set Dist to Dist + PlanHSpd. //increase distance by current speed
-		set PlanAlt to PlanAlt + VSpd. //Decrease Altitude by vertical speed (NOTE the VSpd variable will be negative during descent)
-		set FuelRate to ((PlanThru*1000)/(constant:g0 * ShipISP)). //calculate the fuel flow rate of the main engines in KG/s
-		set ShipMass to ShipMass - (FuelRate/1000). //reduce ship mass by the amount of fuel used per second at the given thrust		
-		set NewEntry to LIST(Dist,PlanAlt,PlanHSpd,Vspd). //list the parameters to be stored in the plan
+		set VAcc to (LiftNeeded / (ShipMass*1000)). //calculate vertical acceleration (acceleration due to gravity)
+		set Vspd to Vspd - (VAcc * Resolution). //calculate what the new vertical speed would be if not pitched up
+		set PlanHSpd to PlanHSpd - (HAcc * Resolution). //reduce Horizontal Speed by acceleration this pass
+		set Dist to Dist + (PlanHSpd * Resolution). //increase distance by current speed
+		set PlanAlt to PlanAlt + (VSpd * Resolution). //Decrease Altitude by vertical speed (NOTE the VSpd variable will be negative during descent)
+		set FuelRate to ((PlanThru*1000)/(constant:g0 * ShipISP) * Resolution). //calculate the fuel flow rate of the main engines in KG/step
+		set ShipMass to ShipMass - (FuelRate/1000). //reduce ship mass by the amount of fuel used per second at the given thrust, multiplied by the resolution
+		set NewEntry to LIST(Dist,PlanAlt,PlanHSpd,(Vspd/Resolution)). //list the parameters to be stored in the plan
 		Plan:add(NewEntry). //add the entry to the plan
+		
+		//DEBUG ZONE
+		//print "HSPD: " + PlanHSpd.
+		//print "Vspd: " + Vspd.
+		//print "LIFT Rat: " + PitchRatio.
+		//print "LiftNeeded:" + LiftNeeded.
 	}
 	if DescentError = TRUE //if an error was encountered
 	{
-		set PlanF to list(list(10)). //make a very small flightplan with a negative first distance
+		set PlanF to list(list(-10)). //make a very small flightplan with a negative first distance
 	}
 	else
 	{
@@ -201,12 +211,12 @@ function FlightPlan //function to create a flight plan of the descent by stepwis
 		
 		from {local i is 0.} until i = Plan:Length-1 step {set i to i+1.} do
 		{
-			set NewDist to plan[i][0] - DescentDistance. //invert the distance of this element in the plan
+			set NewDist to abs(plan[i][0] - DescentDistance). //invert the distance of this element in the plan
 			Distances:ADD(NewDist). //add the new distance to the new list	
 		}
 		
 		//find the FlightPlan entry that lands at the gate
-		Set GateDistRaw to Plan[Plan:Length-1][0] - 1000. //calculate the total distance travelled in the flightplan minus 1km
+		Set GateDistRaw to DescentDistance - GateOffset. //calculate the total distance travelled in the flightplan minus 1km
 		from {local i is 0.} until i = Plan:Length-1 step {set i to i+1.} do
 		{
 			if Plan[i][0] > GateDistRaw
@@ -223,7 +233,7 @@ function FlightPlan //function to create a flight plan of the descent by stepwis
 		set HandoverAlt to -1.
 		from {local i is 0.} until HandoverAlt > 0 step {set i to i+1.} do
 		{
-			if (abs(Plan[i][3])*(GateEntry-i)) > (Plan[i][1] - GateAlt) //if the vertical speed at this entry gives a total altitude change (over the remaining duration until the gate) greater than the altitude between current and gate alt
+			if (abs(Plan[i][3])*((GateEntry-i) * Resolution)) > (Plan[i][1] - GateAlt) //if the vertical speed at this entry gives a total altitude change (over the remaining duration until the gate) greater than the altitude between current and gate alt
 			{
 				set PitchTime to i. //remember the index of the handover point (handover between pure braking and controlled descent)				
 				set HandoverAlt to Plan[i][1]. //remember the handover altitude
@@ -233,7 +243,7 @@ function FlightPlan //function to create a flight plan of the descent by stepwis
 			}
 		}
 			
-		set ControlledTime to GateEntry-PitchTime. //remember how long the flightplan calls for controlled descent (how many steps are after the handover time)
+		set ControlledTime to (GateEntry-PitchTime) * Resolution. //remember how long the flightplan calls for controlled descent (how many steps are after the handover time)
 		set TgtVSpd to (HandoverAlt-GateAlt)/ControlledTime * -1. //recalculate Target Vertical Speed for Controlled Descent to finish at exactly the correct altitude (Negative because we are descending)
 		
 		set AltList to list(). //create a new list to store new altitude information
@@ -248,7 +258,7 @@ function FlightPlan //function to create a flight plan of the descent by stepwis
 			}
 			else //we are at or beyond the point of controlled descent start
 			{				
-				set NewAlt to (AltList[i-1][0] + TgtVSpd). //set new altitude to previous altitude minus vertical speed (Speed here is negative)
+				set NewAlt to (AltList[i-1][0] + (TgtVSpd * Resolution)). //set new altitude to previous altitude minus vertical speed (Speed here is negative)
 				set NewAltList to list(NewAlt,TgtVSpd). //create a new list of the new altitude and target vertical speed
 				AltList:Add(NewAltList). //add this sublist to the new altitude list
 			}
@@ -274,8 +284,8 @@ function FlightPlan //function to create a flight plan of the descent by stepwis
 
 //Initialisation
 //set up terminal, get landing target information, check for vessel stats loaded, check orbit params
-SET TERMINAL:WIDTH to 66. //return to 36 later
-SET TERMINAL:HEIGHT to 40. //return to 20 later
+SET TERMINAL:WIDTH to 36. //return to 36 later
+SET TERMINAL:HEIGHT to 20. //return to 20 later
 
 set ClearLine to "                              ". //a string of spaces to act as a line clearer
 
@@ -462,8 +472,17 @@ if RUNMODE = "ORB"
 		}
 		lock steering to heading(HDGPoint,0).
 		
-		until abs(ShipHeading - HDGPoint) < 0.1 //until we are pointing in the right direction
+		set Orient to FALSE.
+		until Orient = TRUE //until we are pointing in the right direction
 		{
+			if abs(ShipHeading - HDGPoint) < 0.1
+			{
+				wait 1. //wait 1 second before checking again
+				if abs(ShipHeading - HDGPoint) < 0.1 //if still oriented correctly (i.e. heading has settled)
+				{
+					set Orient to TRUE.
+				}
+			}
 			wait 0.
 		}
 		wait TurnTime. //wait 2 seconds for ship to settle
@@ -483,6 +502,7 @@ if RUNMODE = "ORB"
 		}
 		
 		set throttle to 0. //cut engines
+		unlock steering.
 		SET OrbitAligned TO TRUE.
 		StatusText("Orbital Plane Aligned").
 	}
@@ -490,7 +510,7 @@ if RUNMODE = "ORB"
 	Set GateAlt to LZ:TERRAINHEIGHT + GateHeight. //calculate the altitude of the approach gate
 	StatusText("Generating Plan").
 	Set Plan to FlightPlan(MinThrottle,GateAlt,ShipThrust,ship:orbit:periapsis,0,ship:groundspeed,ship:mass,ShipISP). //run the function to create a flight plan for the descent burn, not using totaly accurate starting data yet.
-	if Plan[0][0] > 0 //if the first distance in the flightplan is negative (done in case of error in the plan function)
+	if Plan[0][0] < 0 //if the first distance in the flightplan is negative (done in case of error in the plan function)
 	{
 		//do nothing further
 		print "DEBUG: Plan Reports Error".
@@ -501,10 +521,10 @@ if RUNMODE = "ORB"
 		lock LZRange to circle_distance(Ship:Geoposition,LZ).
 		
 		//warp to near braking burn start
-		SET KUNIVERSE:TIMEWARP:WARP to 2. //10x timewarp to braking burn start
+		SET KUNIVERSE:TIMEWARP:WARP to 2. //100x timewarp to braking burn start
 		until circle_distance(Ship:geoposition,LZ) < abs(Plan[0][0])+(ship:groundspeed*10*TurnTime) //until ship is within the distance travelled in 100 turn times of the braking start
 		{
-			print "DIST " at (0,9).  print round((LZRange/1000),2) at (6,9). print " " + Round(abs(Plan[0][0]/1000),2) at (16,9). Print " KM" at (34,9).
+			print "DIST " at (0,9).  print round((LZRange/1000),2) at (6,9). print " " + Round(abs(Plan[0][0]/1000),2) at (16,9). Print "KM" at (34,9).
 			if circle_distance(Ship:geoposition,LZ) < abs(Plan[0][0])+(ship:groundspeed*30*TurnTime)
 			{
 				SET KUNIVERSE:TIMEWARP:WARP to 1.
@@ -528,6 +548,7 @@ if RUNMODE = "ORB"
 		//recalc flightplan with accurate starting data
 		StatusText("Regenerating Plan").
 		Set Plan to FlightPlan(MinThrottle,GateAlt,ShipThrust,ship:altitude,ship:verticalspeed,ship:groundspeed,ship:mass,ShipISP).
+		StatusText("Plan Regenerated").
 		
 		set RUNMODE to "BRAKE".
 	}
@@ -544,7 +565,7 @@ if RUNMODE = "BRAKE"
 {
 	until circle_distance(Ship:geoposition,LZ) <= abs(Plan[0][0]) //wait until distance to LZ is equal to descent plan distance
 	{
-		print "DIST " at (0,9).  print round((LZRange/1000),2) at (6,9). print " " + Round(abs(Plan[0][0]/1000),2) at (16,9). Print " KM" at (34,9).
+		print "DIST " at (0,9).  print round((LZRange/1000),2) at (6,9). print " " + Round(abs(Plan[0][0]/1000),2) at (16,9). Print "KM" at (34,9).
 		wait 0.
 	}
 	
@@ -553,6 +574,8 @@ if RUNMODE = "BRAKE"
 		set Ship:Control:Fore to 1.
 		Wait 1.
 	}
+	
+	set BurnStartMass to ship:mass. //remember the ship mass at burn start, to be used to calculate used DV later
 	
 	StatusText("Braking Burn").
 	set PlanThrot to 0.95.
@@ -589,33 +612,33 @@ if RUNMODE = "BRAKE"
 		//print all relevant data points to output
 		
 		print Clearline at (0,9).
-		print "DIST " at (0,9).  print round((LZRange/1000),2) at (6,9). print " " + Round(abs(Plan[Entry][0]/1000),2) at (16,9). Print " KM" at (34,9).
+		print "DIST " at (0,9).  print round((LZRange/1000),2) at (6,9). print " " + Round(abs(Plan[Entry][0]/1000),2) at (16,9). Print "KM" at (34,9).
 		print Clearline at (0,10).
-		print "HSPD " at (0,10). print round(ship:groundspeed,1) at (6,10). print " " + round(Plan[Entry][2],1) at (16,10). print " M/S" at (33,10).
+		print "HSPD " at (0,10). print round(ship:groundspeed,1) at (6,10). print " " + round(Plan[Entry][2],1) at (16,10). print "M/S" at (33,10).
 		print Clearline at (0,11).
-		print "VSPD " at (0,11). print round(ship:verticalspeed,1) at (6,11). print " " + round(Plan[Entry][3],1) at (16,11). print " M/S" at (33,11).
+		print "VSPD " at (0,11). print round(ship:verticalspeed,1) at (6,11). print " " + round(Plan[Entry][3],1) at (16,11). print "M/S" at (33,11).
 		print Clearline at (0,12).
-		print "ALT  " at (0,12). print round(ship:altitude/1000,2) at (6,12). print " " + Round (Plan[Entry][1]/1000,2) at (16,12). print " KM" at (34,12).
+		print "ALT  " at (0,12). print round(ship:altitude/1000,2) at (6,12). print " " + Round (Plan[Entry][1]/1000,2) at (16,12). print "KM" at (34,12).
 		print Clearline at (0,13).
-		print "CRS  " at (0,13). print round(Vel_bearing(),1) at (6,13). print " " + round(circle_bearing(ship:geoposition,LZ),1) at (16,13). print " DEG" at (33,13).
+		print "CRS  " at (0,13). print round(Vel_bearing(),1) at (6,13). print " " + round(circle_bearing(ship:geoposition,LZ),1) at (16,13). print "DEG" at (33,13).
 		print Clearline at (0,14).
-		print "HCOR " at (0,14). print round(HDGAdjust,1) at (6,14). print " DEG" at (33,14).
+		print "HCOR " at (0,14). print round(HDGAdjust,1) at (6,14). print "DEG" at (33,14).
 		print Clearline at (0,15).
 		print "PIT  " at (0,15). print " " + round(PlanPitch+PitchAdjust,1) at (16,15).
 		
 		//print Clearline at (0,17).
 		//print "LiftRatio: " + round((LiftNeeded/(ThrustOutput(ShipThrust*1000,MinThrottle,throttle))),2) at (0,17).
-		print Clearline at (0,18).
-		print "ALTCHECK: " + round(AltCheck,2) at (0,18).
-		print Clearline at (0,19).
-		print "HspdCheck: " + round(HSpdCheck,2) at (0,19).
-		print Clearline at (0,20).
-		print "VSpdCheck: " + round(VSpdCheck,2) at (0,20).
+		//print Clearline at (0,18).
+		//print "ALTCHECK: " + round(AltCheck,2) at (0,18).
+		//print Clearline at (0,19).
+		//print "HspdCheck: " + round(HSpdCheck,2) at (0,19).
+		//print Clearline at (0,20).
+		//print "VSpdCheck: " + round(VSpdCheck,2) at (0,20).
 		
-		print Clearline at (0,22).
-		print "PitchAdj: " + round(PitchAdjust,2) at (0,22).
-		print Clearline at (0,23).
-		print "ThrotAdj: " + round(ThrotAdjust,2) at (0,23).
+		//print Clearline at (0,22).
+		//print "PitchAdj: " + round(PitchAdjust,2) at (0,22).
+		//print Clearline at (0,23).
+		//print "ThrotAdj: " + round(ThrotAdjust,2) at (0,23).
 		
 		
 		if Plan[Entry]:LENGTH = 5 //if a flag exists at this entry
@@ -742,45 +765,73 @@ if RUNMODE = "APPROACH"
 		lock throttle to 1. //max throttle to prevent overrunning into too low altitude
 		
 		lock CurPitch to 90 - vectorangle(ship:up:forevector, ship:facing:forevector).
-		lock ActAcc to sin(CurPitch) * ((ThrustOutput(ShipThrust*1000,MinThrottle,0.9) - Gravity) / (ship:mass/1000)). //calculate the acceleration achievable at 90% throttle, allowing for gravity
-		lock SafeVSpd to SQRT(2 * (Alt:RADAR + 10) * ActAcc). //calculate the safe vertical speed based on a Hoverslam calculation using current altitude (with 10m safety margin) and acceleration calculated above
+		lock ActAcc to sin(min(89,CurPitch)) * ((ThrustOutput(ShipThrust*1000,MinThrottle,0.85) - Gravity) / (ship:mass*1000)). //calculate the acceleration achievable at 85% throttle, allowing for gravity
+		lock SafeVSpd to SQRT(2 * (max(0.1,Alt:RADAR - 10)) * ActAcc). //calculate the safe vertical speed based on a Hoverslam calculation using current altitude (with 10m safety margin) and acceleration calculated above
 		
-		until CurPitch > 25 //until pitch is above 25 degrees
+		Set ThrotPID to pidloop(0.55 , 0.15 , 0.5 , 0.001 , 1). //now PID controller takes over to control vertical speed
+		
+		until ALT:radar < 100
 		{
-			if ship:verticalspeed < -SafeVspd //if descending faster than the controlled descent speed
-			{
-				set ship:control:fore to 1. //use RCS as extra thrust
-			}
-			else
-			{
-				set ship:control:fore to 0.
-			}
-			wait 0.
-		}
-		
-		set ship:control:fore to 0.
-		Set ThrotPID to pidloop(0.5,0.1,0.3,0.001,1). //now PID controller takes over to control vertical speed
-		
-		until ALT:radar <= 100
-		{
-			set ThrotPID:Setpoint to -SafeVSpd. //try to maintain a descent rate equal to 2.5% the radar altitude, i,e, 2.5m/s at 100m alt.
+			//print stats
+			print Clearline at (0,9).
+			print "DIST " at (0,9).  print round(LZRange,0) at (6,9). Print "M" at (34,9).
+			print Clearline at (0,10).
+			print "HSPD " at (0,10). print round(ship:groundspeed,1) at (6,10). print "M/S" at (33,10).
+			print Clearline at (0,11).
+			print "VSPD " at (0,11). print round(ship:verticalspeed,1) at (6,11). print "M/S" at (33,11).
+			print Clearline at (0,12).
+			print "ALT  " at (0,12). print round(Alt:RADAR,1) at (6,12). print "M" at (34,12).
+			print Clearline at (0,13).
+			print Clearline at (0,14).
+			print Clearline at (0,15).
+			print Clearline at (0,16).
+			print Clearline at (0,17).
+			print Clearline at (0,18).
+			print Clearline at (0,19).
+			
+			set ThrotPID:Setpoint to min(-0.5,-SafeVSpd). //try to maintain a descent rate equal to 2.5% the radar altitude, i,e, 2.5m/s at 100m alt.
 			set throttle to ThrotPID:update(time:seconds,ship:verticalspeed). //update throttle using PID loop.
 			wait 0.
 		}
 		
 		
 		StatusText("Final Descent").
-		lock steering to up.
+		//lock steering to up.
 		
 		//wait for landing
 		until alt:radar < 1
 		{
-			set ThrotPID:Setpoint to MIN(-0.5,-SafeVSpd). //try to maintain a descent rate equal to 3.33% the radar altitude, i,e, 3.33m/s at 100m alt.
+			//print stats
+			print Clearline at (0,9).
+			print "DIST " at (0,9).  print round(LZRange,0) at (6,9). Print " M" at (34,9).
+			print Clearline at (0,10).
+			print "HSPD " at (0,10). print round(ship:groundspeed,1) at (6,10). print " M/S" at (33,10).
+			print Clearline at (0,11).
+			print "VSPD " at (0,11). print round(ship:verticalspeed,1) at (6,11). print " M/S" at (33,11).
+			print Clearline at (0,12).
+			print "ALT  " at (0,12). print round(Alt:RADAR,1) at (6,12). print " M" at (34,12).
+			print Clearline at (0,13).
+			print Clearline at (0,14).
+			print Clearline at (0,15).
+			print Clearline at (0,16).
+			print Clearline at (0,17).
+			print Clearline at (0,18).
+			print Clearline at (0,19).
+			
+			set ThrotPID:Setpoint to MIN(-0.5,-SafeVSpd). 
 			set throttle to ThrotPID:update(time:seconds,ship:verticalspeed). //update throttle using PID loop.
 			
-			if ship:verticalspeed > -0.25 //if no longer descending
+			if ship:verticalspeed > -0.1 //if no longer descending
 			{
+				StatusText("CLIMBING, MECO").
+				lock steering to up. //
 				break. //kick out of the loop; likely due to contacting the ground, or else because minimum TWR is too high
+			}
+			
+			if ship:status = "LANDED" //if KoS notices that the ship is landed
+			{
+				StatusText("TOUCHDOWN, MECO").
+				break. //kick out of the loop
 			}
 			
 			wait 0.
@@ -789,21 +840,26 @@ if RUNMODE = "APPROACH"
 		//release all controls
 		unlock throttle.
 		set throttle to 0.
-		unlock throttle.
+		unlock throttle. //i'm not paranoid about throttle cuts... honest...
 		
-		until STATUS = "LANDED"
+		unlock steering.
+		RCS OFF.
+		
+		until ship:status = "LANDED"
 		{
 			wait 0.
 		}
-		StatusText("TOUCHDOWN, MECO").
-		unlock steering.
 		
 		wait 10.
 		
 		//print final stats
-		set LandingDistanceError to (Circle_Distance(Ship:Geoposition,LZ)/1000).
-		print "Landing Distance Error (KM) is:".
-		print LandingDistanceError.
+		set LandingDistanceError to Circle_Distance(Ship:Geoposition,LZ).
+		print "Landing Distance Error (M) is:" at (0,14).
+		print round(LandingDistanceError,0) at (0,15).
+		
+		set DvUsed to ShipISP * constant:g0 * LN(BurnStartMass/ship:mass).
+		print "Estimated dV of Descent is:" at (0,17).
+		print round(DvUsed,0) at (0,18).
 		
 		
 		//deploy panels etc.
