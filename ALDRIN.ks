@@ -287,7 +287,7 @@ function FlightPlan //function to create a flight plan of the descent by stepwis
 SET TERMINAL:WIDTH to 36. //return to 36 later
 SET TERMINAL:HEIGHT to 20. //return to 20 later
 
-set ClearLine to "                              ". //a string of spaces to act as a line clearer
+set ClearLine to "                                    ". //a string of spaces to act as a line clearer
 
 set SOUND to GetVoice(0). //get the voice to play sounds later
 set DoubleBeep to list(NOTE(1000,0.1),NOTE(0,0.2),NOTE(1000,0.1)).
@@ -764,39 +764,14 @@ if RUNMODE = "APPROACH"
 		lock steering to SRFRETROGRADE. //start orienting to surface retrograde, leave throttle as it was set before
 		lock throttle to 1. //max throttle to prevent overrunning into too low altitude
 		
+		set FinalHDG to vel_Bearing(). //remember the final heading course
 		lock CurPitch to 90 - vectorangle(ship:up:forevector, ship:facing:forevector).
 		lock ActAcc to sin(min(89,CurPitch)) * ((ThrustOutput(ShipThrust*1000,MinThrottle,0.85) - Gravity) / (ship:mass*1000)). //calculate the acceleration achievable at 85% throttle, allowing for gravity
 		lock SafeVSpd to SQRT(2 * (max(0.1,Alt:RADAR - 10)) * ActAcc). //calculate the safe vertical speed based on a Hoverslam calculation using current altitude (with 10m safety margin) and acceleration calculated above
 		
-		Set ThrotPID to pidloop(0.55 , 0.15 , 0.5 , 0.001 , 1). //now PID controller takes over to control vertical speed
+		Set ThrotPID to pidloop(0.55 , 0.15 , 0.6 , 0.001 , 1). //now PID controller takes over to control vertical speed
 		
-		until ALT:radar < 100
-		{
-			//print stats
-			print Clearline at (0,9).
-			print "DIST " at (0,9).  print round(LZRange,0) at (6,9). Print "M" at (34,9).
-			print Clearline at (0,10).
-			print "HSPD " at (0,10). print round(ship:groundspeed,1) at (6,10). print "M/S" at (33,10).
-			print Clearline at (0,11).
-			print "VSPD " at (0,11). print round(ship:verticalspeed,1) at (6,11). print "M/S" at (33,11).
-			print Clearline at (0,12).
-			print "ALT  " at (0,12). print round(Alt:RADAR,1) at (6,12). print "M" at (34,12).
-			print Clearline at (0,13).
-			print Clearline at (0,14).
-			print Clearline at (0,15).
-			print Clearline at (0,16).
-			print Clearline at (0,17).
-			print Clearline at (0,18).
-			print Clearline at (0,19).
-			
-			set ThrotPID:Setpoint to min(-0.5,-SafeVSpd). //try to maintain a descent rate equal to 2.5% the radar altitude, i,e, 2.5m/s at 100m alt.
-			set throttle to ThrotPID:update(time:seconds,ship:verticalspeed). //update throttle using PID loop.
-			wait 0.
-		}
-		
-		
-		StatusText("Final Descent").
-		//lock steering to up.
+		set RETRO to true.
 		
 		//wait for landing
 		until alt:radar < 1
@@ -818,8 +793,16 @@ if RUNMODE = "APPROACH"
 			print Clearline at (0,18).
 			print Clearline at (0,19).
 			
-			set ThrotPID:Setpoint to MIN(-0.5,-SafeVSpd). 
+			set ThrotPID:Setpoint to max(min(-0.5,ship:verticalspeed),MIN(-0.5,-SafeVSpd)). //setpoint is the slower descent rate of either max safe speed, or current speed (to avoid increasing descent speed), but never more than 0.5m/s
 			set throttle to ThrotPID:update(time:seconds,ship:verticalspeed). //update throttle using PID loop.
+			
+			if RETRO = TRUE //as long as we have not triggered the final steering
+			{
+				if ship:groundspeed < FinalHSpdTolerance
+				{
+					lock steering to heading(FinalHDG,90). //point the ship straight up.
+				}
+			}
 			
 			if ship:verticalspeed > -0.1 //if no longer descending
 			{
