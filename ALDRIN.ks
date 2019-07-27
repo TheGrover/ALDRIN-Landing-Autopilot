@@ -314,21 +314,30 @@ else
 {
 	set RUNMODE to "PROBLEM".
 	StatusText("SHIP STATS NOT LOADED").
-	break.
 }
 
 if SHIP:ORBIT:PERIAPSIS < 30000
 {
 	set RUNMODE to "PROBLEM".
 	StatusText("PE MUST BE ABOVE 30K").
-	break.
 }
 
 if SHIP:ORBIT:APOAPSIS > 40000
 {
 	set RUNMODE to "PROBLEM".
 	StatusText("AP MUST BE BELOW 40K").
-	break.
+}
+
+if SHIP:ORBIT:Inclination > 80 AND Ship:orbit:inclination < 100
+{
+	set RUNMODE to "PROBLEM".
+	StatusText("Orbit Mustn't be Polar").
+}
+
+if SHIP:ORBIT:Inclination < -80 AND Ship:orbit:inclination > -100
+{
+	set RUNMODE to "PROBLEM".
+	StatusText("Orbit Mustn't be Polar").
 }
 
 set WayPoints to ALLWAYPOINTS(). //make a list of all the KSP waypoints available
@@ -485,7 +494,7 @@ if RUNMODE = "ORB"
 			}
 			wait 0.
 		}
-		wait TurnTime. //wait 2 seconds for ship to settle
+		wait 1.		//wait 1 second for ship to settle
 		
 		if ULLAGE = TRUE //if ullage is needed
 		{
@@ -804,7 +813,7 @@ if RUNMODE = "APPROACH"
 				}
 			}
 			
-			if ship:verticalspeed > -0.1 //if no longer descending
+			if ship:verticalspeed > -0.1 AND Alt:Radar < 50 //if no longer descending, and lower than 50m
 			{
 				StatusText("CLIMBING, MECO").
 				lock steering to up. //
@@ -825,13 +834,13 @@ if RUNMODE = "APPROACH"
 		set throttle to 0.
 		unlock throttle. //i'm not paranoid about throttle cuts... honest...
 		
-		unlock steering.
-		RCS OFF.
-		
 		until ship:status = "LANDED"
 		{
 			wait 0.
 		}
+		
+		unlock steering.
+		RCS OFF.
 		
 		wait 10.
 		
